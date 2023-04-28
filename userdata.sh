@@ -7,4 +7,7 @@ node --version
 git clone https://github.com/Atophite/PaceManBot.git /home/PaceManBot/
 cd /home/PaceManBot/
 npm i
-node /home/PaceManBot/index.mjs
+npm install pm2 -g
+pm2 start /home/PaceManBot/index.mjs --name my_app --watch
+pm2 save
+pm2 startup

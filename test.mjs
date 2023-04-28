@@ -223,3 +223,16 @@ export const handler = async(event) => {
   };
   return response;
 };
+
+async function main() {
+  const describeCommand = new DescribeInstancesCommand({
+    Filters: [
+        { Name: `tag:Name`, Values: ["PaceManBot"] },
+        { Name: 'instance-state-name', Values: ['stopped'] }
+    ]
+  });
+  const describeResult = await ec2Client.send(describeCommand);
+  console.log(describeResult.Reservations[1].Instances)
+}
+
+await main()
