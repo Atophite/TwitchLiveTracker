@@ -1,75 +1,64 @@
-import fetch, {
-  Blob,
-  blobFrom,
-  blobFromSync,
-  File,
-  fileFrom,
-  fileFromSync,
-  FormData,
-  Headers,
-  Request,
-  Response,
-} from 'node-fetch'
+import fetch from 'node-fetch'
 
-import { EmbedBuilder, WebhookClient } from 'discord.js';
-import {S3Client, GetObjectCommand, PutObjectCommand} from "@aws-sdk/client-s3";
 import {EC2Client, RunInstancesCommand, StopInstancesCommand, TerminateInstancesCommand, DescribeInstancesCommand, StartInstancesCommand } from "@aws-sdk/client-ec2";
 import { EventBridgeClient, DisableRuleCommand, EnableRuleCommand } from "@aws-sdk/client-eventbridge";
-import * as fs from "fs"
+import { DynamoDBClient, GetItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import * as clients from "./clients.mjs" 
+import * as twitch from "./twitch.mjs"
+import * as database from "./database.mjs"
+
+// async function getIsLiveFromDB() {
+//   const input = {
+//       TableName: "twitch_islive_table",
+//       Key: {
+//           id: {
+//               N: "0"
+//           },
+
+//       }
+//   }
+
+//   const command = new GetItemCommand(input);
+//   const response = await clients.getDynamoClient().send(command)
+//   const isLive = response.Item.is_live.BOOL
+//   console.log(response.Item)
+//   return isLive
+// }
 
 
-const BUCKET_NAME = 'twitchtrackerbucket';
-const OBJECT_KEY = 'streamer-state.json';
-
-const webhookClient = new WebhookClient({ url: 'https://discord.com/api/webhooks/1100451423478628442/yqIzp1ov9D-zAMlRSa3MP2t4RIeq3NTgrRXaQS3ouBZk8epvHXsMiy68lW-Z5z2P8Pt2' });
-
-const ec2Client = new EC2Client()
-const s3Client = new S3Client({region: "us-east-1"})
-const eventClient = new EventBridgeClient();
-
-async function getState() {
-  const command = new GetObjectCommand({
-    Bucket: BUCKET_NAME,
-    Key: OBJECT_KEY,
-  });
-  try {
-    const response = await s3Client.send(command);
-    // The Body object also has 'transformToByteArray' and 'transformToWebStream' methods.
-    const str = await response.Body.transformToString();
-    console.log(str)
-
-    return JSON.parse(str)
-  } catch (err) {
-    console.error(err);
-  }
-
-}
-
-async function updateState(newState) {
-
-  const command = new PutObjectCommand({
-    Bucket: BUCKET_NAME,
-    Key: OBJECT_KEY,
-    Body: JSON.stringify(newState),
-  });
-
-  try {
-    const response = await s3Client.send(command);
-    console.log(response);
-  } catch (err) {
-    console.error(err);
-  }
-}
-
+// async function updateLiveState(isLive) {
+//   const input = {
+//       ExpressionAttributeNames: {
+//           "#il": "is_live"
+//       },
+//       ExpressionAttributeValues: {
+//           ":l": {
+//               "BOOL": isLive
+//           }
+//       },
+//       TableName: "twitch_islive_table",
+//       Key: {
+//           id: {
+//               N: "0"
+//           }
+//       },
+//       ReturnValues: "ALL_NEW",
+//       UpdateExpression: "SET #il = :l"
+//   }
+//   const command = new UpdateItemCommand(input);
+//   const response = await clients.getDynamoClient().send(command)
+//   console.log(response)
+// }
 
 async function startInstanceByTag(tagName, tagValue) {
   const describeCommand = new DescribeInstancesCommand({
     Filters: [
         { Name: `tag:${tagName}`, Values: [tagValue] },
-        { Name: 'instance-state-name', Values: ['stopped'] }
+        { Name: 'instance-state-name', Values: ['stopped', 'running'] }
     ]
   });
-  const describeResult = await ec2Client.send(describeCommand);
+  
+  const describeResult = await clients.getEc2Client().send(describeCommand)
   const instanceIds = describeResult.Reservations.flatMap(reservation => reservation.Instances.map(instance => instance.InstanceId));
   
   const startCommand = new StartInstancesCommand({
@@ -79,7 +68,7 @@ async function startInstanceByTag(tagName, tagValue) {
   });
 
   try {
-    const response = await ec2Client.send(startCommand);
+    const response = await clients.getEc2Client().send(startCommand)
     console.log(response);
   } catch (err) {
     console.error(err);
@@ -95,7 +84,7 @@ async function stopInstancesByTag(tagName, tagValue) {
             { Name: 'instance-state-name', Values: ['running', 'pending'] } // Only get instances in running or pending state
         ]
     });
-    const describeResult = await ec2Client.send(describeCommand);
+    const describeResult = await clients.getEc2Client().send(describeCommand)
     const instanceIds = describeResult.Reservations.flatMap(reservation => reservation.Instances.map(instance => instance.InstanceId));
 
     // If there are no instances with the specified tag, log an error message and return
@@ -106,7 +95,7 @@ async function stopInstancesByTag(tagName, tagValue) {
 
     // Stop the instances with the retrieved instance IDs
     const stopCommand = new StopInstancesCommand({ InstanceIds: instanceIds });
-    const stopResult = await ec2Client.send(stopCommand);
+    const stopResult = await clients.getEc2Client().send(stopCommand)
     const stoppingInstances = stopResult.StoppingInstances.map(instance => instance.InstanceId);
 
     console.log(`Stopping instances: ${stoppingInstances.join(", ")}`);
@@ -116,47 +105,90 @@ async function stopInstancesByTag(tagName, tagValue) {
 }
 
 function sendNotification(channelName) {
-  webhookClient.send({
+  clients.getWebHookClient().send({
     content: `${channelName} is live Pog!`
   });
   console.log("discord notification sent")
 }
 
-async function checkLive(channelName){
-  let url = await fetch(`https://www.twitch.tv/${channelName}`);
-  const state = await getState()
+async function checkLive(channelName) {
+  const isLiveFromDB = await database.getIsLiveFromDB()
+  const isPlayingFromDB = await database.getIsPlayingFromDB()
+
+  const isLiveAndMinecraft = await twitch.checkLiveAndMinecraft(channelName)
+  const isLive = await twitch.checkLive(channelName)
 
 
-  if((await url.text()).includes('isLiveBroadcast') ) {
-
-      if(state.isLive == false) {
-        sendNotification(channelName);
-        await startInstanceByTag("Name", "PaceManBot")
-        await updateState({ isLive: true, instanceId: null })
-        await disable5MinRule()
-        await enable30MinRule()
-      }
-      else {
-        console.log("No instances has been started")
-      }
-
-      console.log("streamer is live")
-      
-      return true
+  if(isLive) {
+    if(isLiveFromDB == false) {
+      await database.updateLiveState(true)
+      sendNotification(channelName);
+    }
   }
-  else {
-    console.log("streamer is not live")
-    if(state.isLive == true) {
+
+  if(isLiveAndMinecraft == true) {
+    if(isPlayingFromDB != "Minecraft") {
+      await startInstanceByTag("Name", "PaceManBot")
+      await database.updateIsPlayingState("Minecraft")
+      await disable5MinRule()
+      await enable30MinRule()
+    }
+    else {
+      console.log("No instances has been started")
+    }
+    
+    
+  }
+  else if(isLiveAndMinecraft == false) {
+    if(isPlayingFromDB == "Minecraft") {
       await stopInstancesByTag("Name", "PaceManBot")
-      await updateState({ isLive: false, instanceId: null })
+      await database.updateIsPlayingState("Not Minecraft")
       await enable5MinRule()
       await disable30MinRule()
     }
-    
-    return false
   }
 
+  if(isLive == false) {
+    await database.updateLiveState(false)
+  }
+  
 }
+
+// async function checkLive(channelName){
+//   let url = await fetch(`https://www.twitch.tv/${channelName}`);
+//   const isLive = await getIsLiveFromDB()
+
+
+//   if((await url.text()).includes('isLiveBroadcast') ) {
+
+//       if(isLive == false) {
+//         sendNotification(channelName);
+//         await startInstanceByTag("Name", "PaceManBot")
+//         await updateLiveState(true)
+//         await disable5MinRule()
+//         await enable30MinRule()
+//       }
+//       else {
+//         console.log("No instances has been started")
+//       }
+
+//       console.log("streamer is live")
+      
+//       return true
+//   }
+//   else {
+//     console.log("streamer is not live")
+//     if(isLive == true) {
+//       await stopInstancesByTag("Name", "PaceManBot")
+//       await updateLiveState(false)
+//       await enable5MinRule()
+//       await disable30MinRule()
+//     }
+    
+//     return false
+//   }
+
+// }
 
 async function disable5MinRule() {
   const input = { // DisableRuleRequest
@@ -165,7 +197,7 @@ async function disable5MinRule() {
   const command = new DisableRuleCommand(input);
 
   try {
-    const response = await eventClient.send(command);
+    const response = await clients.getEventClient().send(command)
     console.log(response);
   } catch (err) {
     console.error(err);
@@ -178,7 +210,7 @@ async function enable5MinRule() {
   };
   const command = new EnableRuleCommand(input);
   try {
-    const response = await eventClient.send(command);
+    const response = await clients.getEventClient().send(command)
     console.log(response);
   } catch (err) {
     console.error(err);
@@ -191,7 +223,7 @@ async function disable30MinRule() {
   };
   const command = new DisableRuleCommand(input);
   try {
-    const response = await eventClient.send(command);
+    const response = await clients.getEventClient().send(command)
     console.log(response);
   } catch (err) {
     console.error(err);
@@ -204,7 +236,7 @@ async function enable30MinRule() {
   };
   const command = new EnableRuleCommand(input);
   try {
-    const response = await eventClient.send(command);
+    const response = await clients.getEventClient().send(command)
     console.log(response);
   } catch (err) {
     console.error(err);
@@ -225,14 +257,15 @@ export const handler = async(event) => {
 };
 
 async function main() {
-  const describeCommand = new DescribeInstancesCommand({
-    Filters: [
-        { Name: `tag:Name`, Values: ["PaceManBot"] },
-        { Name: 'instance-state-name', Values: ['stopped'] }
-    ]
-  });
-  const describeResult = await ec2Client.send(describeCommand);
-  console.log(describeResult.Reservations[1].Instances)
+  let isLiveBoolean = await checkLive('xqc')
+  let streamerString = 'xqc'
+
+  const response = {
+      statusCode: 200,
+      isLive: isLiveBoolean,
+      streamer: streamerString
+  };
+  return response;
 }
 
 await main()

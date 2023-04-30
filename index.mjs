@@ -1,66 +1,54 @@
-import fetch, {
-  Blob,
-  blobFrom,
-  blobFromSync,
-  File,
-  fileFrom,
-  fileFromSync,
-  FormData,
-  Headers,
-  Request,
-  Response,
-} from 'node-fetch'
+import fetch from 'node-fetch'
 
 import { EmbedBuilder, WebhookClient } from 'discord.js';
-import {S3Client, GetObjectCommand, PutObjectCommand} from "@aws-sdk/client-s3";
 import {EC2Client, RunInstancesCommand, StopInstancesCommand, TerminateInstancesCommand, DescribeInstancesCommand, StartInstancesCommand } from "@aws-sdk/client-ec2";
 import { EventBridgeClient, DisableRuleCommand, EnableRuleCommand } from "@aws-sdk/client-eventbridge";
-import * as fs from "fs"
-
-
-const BUCKET_NAME = 'twitchtrackerbucket';
-const OBJECT_KEY = 'streamer-state.json';
+import { DynamoDBClient, GetItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import * as clients from "./clients.mjs" 
 
 const webhookClient = new WebhookClient({ url: 'https://discord.com/api/webhooks/1100451423478628442/yqIzp1ov9D-zAMlRSa3MP2t4RIeq3NTgrRXaQS3ouBZk8epvHXsMiy68lW-Z5z2P8Pt2' });
 
-const ec2Client = new EC2Client()
-const s3Client = new S3Client({region: "us-east-1"})
-const eventClient = new EventBridgeClient();
+async function getIsLive() {
+  const input = {
+      TableName: "twitch_islive_table",
+      Key: {
+          id: {
+              N: "0"
+          },
 
-async function getState() {
-  const command = new GetObjectCommand({
-    Bucket: BUCKET_NAME,
-    Key: OBJECT_KEY,
-  });
-  try {
-    const response = await s3Client.send(command);
-    // The Body object also has 'transformToByteArray' and 'transformToWebStream' methods.
-    const str = await response.Body.transformToString();
-    console.log(str)
-
-    return JSON.parse(str)
-  } catch (err) {
-    console.error(err);
+      }
   }
 
+  const command = new GetItemCommand(input);
+  const response = await clients.getDynamoClient().send(command)
+  const isLive = response.Item.is_live.BOOL
+  console.log(response.Item)
+  return isLive
 }
 
-async function updateState(newState) {
-
-  const command = new PutObjectCommand({
-    Bucket: BUCKET_NAME,
-    Key: OBJECT_KEY,
-    Body: JSON.stringify(newState),
-  });
-
-  try {
-    const response = await s3Client.send(command);
-    console.log(response);
-  } catch (err) {
-    console.error(err);
+async function updateLiveState(isLive) {
+  const input = {
+      ExpressionAttributeNames: {
+          "#il": "is_live"
+      },
+      ExpressionAttributeValues: {
+          ":l": {
+              "BOOL": isLive
+          }
+      },
+      TableName: "twitch_islive_table",
+      Key: {
+          id: {
+              N: "0"
+          }
+      },
+      ReturnValues: "ALL_NEW",
+      UpdateExpression: "SET #il = :l"
   }
+  const command = new UpdateItemCommand(input);
+  const response = await clients.getDynamoClient().send(command)
+  console.log(response)
 }
-
 
 async function startInstanceByTag(tagName, tagValue) {
   const describeCommand = new DescribeInstancesCommand({
@@ -69,7 +57,8 @@ async function startInstanceByTag(tagName, tagValue) {
         { Name: 'instance-state-name', Values: ['stopped'] }
     ]
   });
-  const describeResult = await ec2Client.send(describeCommand);
+  
+  const describeResult = await clients.getEc2Client().send(describeCommand)
   const instanceIds = describeResult.Reservations.flatMap(reservation => reservation.Instances.map(instance => instance.InstanceId));
   
   const startCommand = new StartInstancesCommand({
@@ -79,7 +68,7 @@ async function startInstanceByTag(tagName, tagValue) {
   });
 
   try {
-    const response = await ec2Client.send(startCommand);
+    const response = await clients.getEc2Client().send(startCommand)
     console.log(response);
   } catch (err) {
     console.error(err);
@@ -95,7 +84,7 @@ async function stopInstancesByTag(tagName, tagValue) {
             { Name: 'instance-state-name', Values: ['running', 'pending'] } // Only get instances in running or pending state
         ]
     });
-    const describeResult = await ec2Client.send(describeCommand);
+    const describeResult = await clients.getEc2Client().send(describeCommand)
     const instanceIds = describeResult.Reservations.flatMap(reservation => reservation.Instances.map(instance => instance.InstanceId));
 
     // If there are no instances with the specified tag, log an error message and return
@@ -106,7 +95,7 @@ async function stopInstancesByTag(tagName, tagValue) {
 
     // Stop the instances with the retrieved instance IDs
     const stopCommand = new StopInstancesCommand({ InstanceIds: instanceIds });
-    const stopResult = await ec2Client.send(stopCommand);
+    const stopResult = await clients.getEc2Client().send(stopCommand)
     const stoppingInstances = stopResult.StoppingInstances.map(instance => instance.InstanceId);
 
     console.log(`Stopping instances: ${stoppingInstances.join(", ")}`);
@@ -122,17 +111,18 @@ function sendNotification(channelName) {
   console.log("discord notification sent")
 }
 
+
 async function checkLive(channelName){
   let url = await fetch(`https://www.twitch.tv/${channelName}`);
-  const state = await getState()
+  const isLive = await getIsLive()
 
 
   if((await url.text()).includes('isLiveBroadcast') ) {
 
-      if(state.isLive == false) {
+      if(isLive == false) {
         sendNotification(channelName);
         await startInstanceByTag("Name", "PaceManBot")
-        await updateState({ isLive: true, instanceId: null })
+        await updateLiveState(true)
         await disable5MinRule()
         await enable30MinRule()
       }
@@ -146,9 +136,9 @@ async function checkLive(channelName){
   }
   else {
     console.log("streamer is not live")
-    if(state.isLive == true) {
+    if(isLive == true) {
       await stopInstancesByTag("Name", "PaceManBot")
-      await updateState({ isLive: false, instanceId: null })
+      await updateLiveState(false)
       await enable5MinRule()
       await disable30MinRule()
     }
@@ -165,7 +155,7 @@ async function disable5MinRule() {
   const command = new DisableRuleCommand(input);
 
   try {
-    const response = await eventClient.send(command);
+    const response = await clients.getEventClient().send(command)
     console.log(response);
   } catch (err) {
     console.error(err);
@@ -178,7 +168,7 @@ async function enable5MinRule() {
   };
   const command = new EnableRuleCommand(input);
   try {
-    const response = await eventClient.send(command);
+    const response = await clients.getEventClient().send(command)
     console.log(response);
   } catch (err) {
     console.error(err);
@@ -191,7 +181,7 @@ async function disable30MinRule() {
   };
   const command = new DisableRuleCommand(input);
   try {
-    const response = await eventClient.send(command);
+    const response = await clients.getEventClient().send(command)
     console.log(response);
   } catch (err) {
     console.error(err);
@@ -204,7 +194,7 @@ async function enable30MinRule() {
   };
   const command = new EnableRuleCommand(input);
   try {
-    const response = await eventClient.send(command);
+    const response = await clients.getEventClient().send(command)
     console.log(response);
   } catch (err) {
     console.error(err);
