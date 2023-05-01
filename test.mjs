@@ -2,53 +2,9 @@ import fetch from 'node-fetch'
 
 import {EC2Client, RunInstancesCommand, StopInstancesCommand, TerminateInstancesCommand, DescribeInstancesCommand, StartInstancesCommand } from "@aws-sdk/client-ec2";
 import { EventBridgeClient, DisableRuleCommand, EnableRuleCommand } from "@aws-sdk/client-eventbridge";
-import { DynamoDBClient, GetItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import * as clients from "./clients.mjs" 
 import * as twitch from "./twitch.mjs"
 import * as database from "./database.mjs"
-
-// async function getIsLiveFromDB() {
-//   const input = {
-//       TableName: "twitch_islive_table",
-//       Key: {
-//           id: {
-//               N: "0"
-//           },
-
-//       }
-//   }
-
-//   const command = new GetItemCommand(input);
-//   const response = await clients.getDynamoClient().send(command)
-//   const isLive = response.Item.is_live.BOOL
-//   console.log(response.Item)
-//   return isLive
-// }
-
-
-// async function updateLiveState(isLive) {
-//   const input = {
-//       ExpressionAttributeNames: {
-//           "#il": "is_live"
-//       },
-//       ExpressionAttributeValues: {
-//           ":l": {
-//               "BOOL": isLive
-//           }
-//       },
-//       TableName: "twitch_islive_table",
-//       Key: {
-//           id: {
-//               N: "0"
-//           }
-//       },
-//       ReturnValues: "ALL_NEW",
-//       UpdateExpression: "SET #il = :l"
-//   }
-//   const command = new UpdateItemCommand(input);
-//   const response = await clients.getDynamoClient().send(command)
-//   console.log(response)
-// }
 
 async function startInstanceByTag(tagName, tagValue) {
   const describeCommand = new DescribeInstancesCommand({
@@ -154,41 +110,6 @@ async function checkLive(channelName) {
   
 }
 
-// async function checkLive(channelName){
-//   let url = await fetch(`https://www.twitch.tv/${channelName}`);
-//   const isLive = await getIsLiveFromDB()
-
-
-//   if((await url.text()).includes('isLiveBroadcast') ) {
-
-//       if(isLive == false) {
-//         sendNotification(channelName);
-//         await startInstanceByTag("Name", "PaceManBot")
-//         await updateLiveState(true)
-//         await disable5MinRule()
-//         await enable30MinRule()
-//       }
-//       else {
-//         console.log("No instances has been started")
-//       }
-
-//       console.log("streamer is live")
-      
-//       return true
-//   }
-//   else {
-//     console.log("streamer is not live")
-//     if(isLive == true) {
-//       await stopInstancesByTag("Name", "PaceManBot")
-//       await updateLiveState(false)
-//       await enable5MinRule()
-//       await disable30MinRule()
-//     }
-    
-//     return false
-//   }
-
-// }
 
 async function disable5MinRule() {
   const input = { // DisableRuleRequest

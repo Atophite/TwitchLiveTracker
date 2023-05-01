@@ -1,6 +1,28 @@
-import { DynamoDBClient, GetItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import { GetItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 
 import * as clients from "./clients.mjs"
+
+async function getDataFromDB() {
+    const input = {
+        TableName: "twitch_islive_table",
+        Key: {
+            id: {
+                N: "0"
+            },
+
+        }
+    }
+
+    const command = new GetItemCommand(input);
+    const response = await clients.getDynamoClient().send(command)
+
+    const isLive = response.Item.is_live.BOOL
+    const isPlaying = response.Item.is_playing.S
+
+    console.log("Is live: " + isLive)
+    console.log("Is Playing: " + isPlaying)
+    return response.Item
+}
 
 async function updateIsPlayingState(isPlaying) {
     const input = {
@@ -24,42 +46,6 @@ async function updateIsPlayingState(isPlaying) {
     const command = new UpdateItemCommand(input);
     const response = await clients.getDynamoClient().send(command)
     console.log(response)
-}
-
-async function getIsPlayingFromDB() {
-    const input = {
-        TableName: "twitch_islive_table",
-        Key: {
-            id: {
-                N: "0"
-            },
-
-        }
-    }
-
-    const command = new GetItemCommand(input);
-    const response = await clients.getDynamoClient().send(command)
-    const isPlaying = response.Item.is_playing.S
-    console.log("Is Playing: " + isPlaying)
-    return isPlaying
-}
-
-async function getIsLiveFromDB() {
-    const input = {
-        TableName: "twitch_islive_table",
-        Key: {
-            id: {
-                N: "0"
-            },
-
-        }
-    }
-
-    const command = new GetItemCommand(input);
-    const response = await clients.getDynamoClient().send(command)
-    const isLive = response.Item.is_live.BOOL
-    console.log("Is live: " + isLive)
-    return isLive
 }
 
 async function updateLiveState(isLive) {
@@ -86,4 +72,4 @@ async function updateLiveState(isLive) {
     console.log(response)
 }
 
-export {updateLiveState, getIsLiveFromDB, updateIsPlayingState, getIsPlayingFromDB}
+export {updateLiveState, updateIsPlayingState, getDataFromDB}

@@ -1,60 +1,14 @@
-import fetch from 'node-fetch'
-
-import { EmbedBuilder, WebhookClient } from 'discord.js';
-import {EC2Client, RunInstancesCommand, StopInstancesCommand, TerminateInstancesCommand, DescribeInstancesCommand, StartInstancesCommand } from "@aws-sdk/client-ec2";
-import { EventBridgeClient, DisableRuleCommand, EnableRuleCommand } from "@aws-sdk/client-eventbridge";
-import { DynamoDBClient, GetItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import {StopInstancesCommand, DescribeInstancesCommand, StartInstancesCommand } from "@aws-sdk/client-ec2";
+import { DisableRuleCommand, EnableRuleCommand } from "@aws-sdk/client-eventbridge";
 import * as clients from "./clients.mjs" 
-
-const webhookClient = new WebhookClient({ url: 'https://discord.com/api/webhooks/1100451423478628442/yqIzp1ov9D-zAMlRSa3MP2t4RIeq3NTgrRXaQS3ouBZk8epvHXsMiy68lW-Z5z2P8Pt2' });
-
-async function getIsLive() {
-  const input = {
-      TableName: "twitch_islive_table",
-      Key: {
-          id: {
-              N: "0"
-          },
-
-      }
-  }
-
-  const command = new GetItemCommand(input);
-  const response = await clients.getDynamoClient().send(command)
-  const isLive = response.Item.is_live.BOOL
-  console.log(response.Item)
-  return isLive
-}
-
-async function updateLiveState(isLive) {
-  const input = {
-      ExpressionAttributeNames: {
-          "#il": "is_live"
-      },
-      ExpressionAttributeValues: {
-          ":l": {
-              "BOOL": isLive
-          }
-      },
-      TableName: "twitch_islive_table",
-      Key: {
-          id: {
-              N: "0"
-          }
-      },
-      ReturnValues: "ALL_NEW",
-      UpdateExpression: "SET #il = :l"
-  }
-  const command = new UpdateItemCommand(input);
-  const response = await clients.getDynamoClient().send(command)
-  console.log(response)
-}
+import * as twitch from "./twitch.mjs"
+import * as database from "./database.mjs"
 
 async function startInstanceByTag(tagName, tagValue) {
   const describeCommand = new DescribeInstancesCommand({
     Filters: [
         { Name: `tag:${tagName}`, Values: [tagValue] },
-        { Name: 'instance-state-name', Values: ['stopped'] }
+        { Name: 'instance-state-name', Values: ['stopped', 'running'] }
     ]
   });
   
@@ -105,47 +59,55 @@ async function stopInstancesByTag(tagName, tagValue) {
 }
 
 function sendNotification(channelName) {
-  webhookClient.send({
+  clients.getWebHookClient().send({
     content: `${channelName} is live Pog!`
   });
   console.log("discord notification sent")
 }
 
+async function checkLive(channelName) {
+  const DBData = await database.getDataFromDB()
+  const isLiveFromDB = DBData.is_live.BOOL
+  const isPlayingFromDB = DBData.is_playing.S
+  
 
-async function checkLive(channelName){
-  let url = await fetch(`https://www.twitch.tv/${channelName}`);
-  const isLive = await getIsLive()
+  const isLiveAndMinecraft = await twitch.checkLiveAndMinecraft(channelName)
+  const isLive = await twitch.checkLive(channelName)
 
 
-  if((await url.text()).includes('isLiveBroadcast') ) {
-
-      if(isLive == false) {
-        sendNotification(channelName);
-        await startInstanceByTag("Name", "PaceManBot")
-        await updateLiveState(true)
-        await disable5MinRule()
-        await enable30MinRule()
-      }
-      else {
-        console.log("No instances has been started")
-      }
-
-      console.log("streamer is live")
-      
-      return true
+  if(isLive) {
+    if(isLiveFromDB == false) {
+      await database.updateLiveState(true)
+      sendNotification(channelName);
+    }
   }
-  else {
-    console.log("streamer is not live")
-    if(isLive == true) {
+
+  if(isLiveAndMinecraft == true) {
+    if(isPlayingFromDB != "Minecraft") {
+      await startInstanceByTag("Name", "PaceManBot")
+      await database.updateIsPlayingState("Minecraft")
+      await disable5MinRule()
+      await enable30MinRule()
+    }
+    else {
+      console.log("No instances has been started")
+    }
+    
+    
+  }
+  else if(isLiveAndMinecraft == false) {
+    if(isPlayingFromDB == "Minecraft") {
       await stopInstancesByTag("Name", "PaceManBot")
-      await updateLiveState(false)
+      await database.updateIsPlayingState("Not Minecraft")
       await enable5MinRule()
       await disable30MinRule()
     }
-    
-    return false
   }
 
+  if(isLive == false) {
+    await database.updateLiveState(false)
+  }
+  
 }
 
 async function disable5MinRule() {
