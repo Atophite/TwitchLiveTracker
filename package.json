@@ -13,6 +13,8 @@
     "@aws-sdk/client-dynamodb": "^3.321.1",
     "@aws-sdk/client-ec2": "^3.319.0",
     "@aws-sdk/client-eventbridge": "^3.321.1",
+    "@aws-sdk/client-lambda": "^3.322.0",
+    "axios": "^1.4.0",
     "discord.js": "^14.9.0",
     "node-fetch": "^3.3.1"
   }

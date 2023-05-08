@@ -1,14 +1,23 @@
 
-import { EC2Client, RunInstancesCommand, StopInstancesCommand, TerminateInstancesCommand, DescribeInstancesCommand, StartInstancesCommand } from "@aws-sdk/client-ec2";
-import { EventBridgeClient, DisableRuleCommand, EnableRuleCommand } from "@aws-sdk/client-eventbridge";
-import { DynamoDBClient, GetItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
-import { EmbedBuilder, WebhookClient } from 'discord.js';
+import { EC2Client } from "@aws-sdk/client-ec2";
+import { EventBridgeClient } from "@aws-sdk/client-eventbridge";
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { LambdaClient } from "@aws-sdk/client-lambda";
+import { WebhookClient } from 'discord.js';
 
 export let ec2Client
 export let s3Client
 export let eventClient
 export let dynamoClient
 export let webhookClient
+export let lambdaClient
+
+function getLambdaClient() {
+    if(lambdaClient == null) {
+        lambdaClient = new LambdaClient()
+    }
+    return lambdaClient
+}
 
 function getEc2Client() {
     if (ec2Client == null) {
@@ -41,5 +50,5 @@ function getWebHookClient() {
 }
 
 
-export {getDynamoClient, getEc2Client, getEventClient, getWebHookClient}
+export {getDynamoClient, getEc2Client, getEventClient, getWebHookClient, getLambdaClient}
 
