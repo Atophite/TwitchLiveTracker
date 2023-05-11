@@ -49,40 +49,37 @@ function generateToken() {
       .catch((error) => console.error(error));
 }
 
-function checkLive(channelName) {
-    const endpoint = `https://api.twitch.tv/helix/streams?user_login=${channelName}`;
+async function checkLive(channelNames) {
+  let isLiveList = []
+  if(!validateToken()) {
+      return false
+  }
 
-    if(!validateToken()) {
-        return false
-    }
-    
-    return axios.get(endpoint, {
-      headers: {
-        "Client-ID": CLIENT_ID,
-        "Authorization": "Bearer vwmhoyorlzf88fnign8tig1sbf4ell"
+  for(let channel of channelNames) {
+      const endpoint = `https://api.twitch.tv/helix/streams?user_login=${channel}`;
+      try {
+          const response = await axios.get(endpoint, {
+              headers: {
+                  "Client-ID": CLIENT_ID,
+                  "Authorization": "Bearer vwmhoyorlzf88fnign8tig1sbf4ell"
+              }
+          });
+          if(response.data.data.length == 0) {
+              isLiveList.push({"streamer": channel, "is_live": false, "is_playing": "unknown"})
+          }
+          else {
+              for(let x of response.data.data) {
+                  if(x.type == "live") {
+                      isLiveList.push({"streamer": channel, "is_live": true, "is_playing": x.game_name})
+                  }
+              }
+          }
+      } catch(error) {
+          console.log(error)
       }
-    })
-      .then(response => response.data)
-      .then((response) => {
-        
-        if(response.data == null) {
-            return false
-        }
-
-        else if(response.status == 401) {
-          console.log("Invalid 0Auth token")
-        }
-        else if(response.data[0].type == "live") {
-            return true
-        }
-        else {
-            return false
-        }
-      })
-      .catch(error => {
-        console.log(error)
-        return false
-      });
+  }
+  console.log(isLiveList)
+  return isLiveList
 }
 
 async function checkLiveAndMinecraft(channelName) {
@@ -102,10 +99,10 @@ async function checkLiveAndMinecraft(channelName) {
         if(response.data == null) {
             return false
         }
-        else if(response.status == 401) {
+        else if(response.status === 401) {
           console.log("Invalid 0Auth token")
         }
-        else if (response.data[0].game_name == "Minecraft") {
+        else if (response.data[0].game_name === "Minecraft") {
             return true
         }
         else {

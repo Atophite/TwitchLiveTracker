@@ -58,56 +58,79 @@ async function stopInstancesByTag(tagName, tagValue) {
   }
 }
 
-function sendNotification(channelName) {
-  clients.getWebHookClient().send({
-    content: `${channelName} is live Pog!`
-  });
-  console.log("discord notification sent")
+async function sendLiveNotification(channelName) {
+  try {
+    await clients.getWebHookClient().send({
+      content: `${channelName} is live Pog!`
+    });
+    console.log("live notification sent")
+  }
+  catch(err) {
+    console.log(err)
+  }
+  
+  
 }
 
-async function checkLive(channelName) {
+async function sendGameNotification(channelName, gameName) {
+  try {
+    await clients.getWebHookClient().send({
+      content: `${channelName} is playing ${gameName} Pog!`
+    });
+    console.log("game notification sent")
+  }
+  catch(err) {
+    console.log(err)
+  }
+  
+}
+
+async function checkLive() {
   const DBData = await database.getDataFromDB()
-  const isLiveFromDB = DBData.is_live.BOOL
-  const isPlayingFromDB = DBData.is_playing.S
-  
+  const channelNames = DBData.flatMap((obj) => obj.streamer)
+  const isLive = await twitch.checkLive(channelNames)
 
-  const isLiveAndMinecraft = await twitch.checkLiveAndMinecraft(channelName)
-  const isLive = await twitch.checkLive(channelName)
+  for(let dbItem of DBData) {
 
+    for (const obj of isLive) {
+      if(obj.streamer === dbItem.streamer) {
+        if(obj.is_live === true) {
+          
+          if(dbItem.is_live === false) {
+            await database.updateLiveState(dbItem.streamer, true)
+            if(dbItem.live_message === true) {
+              await sendLiveNotification(dbItem.streamer);
+            }
+          }
+          else {
+            console.log(obj.streamer + " is live but DB is up to date")
+          }
+        }
+        else if(obj.is_live === false) {
+          if(dbItem.is_live === true) {
+            console.log("updating live state of " + dbItem.streamer)
+            await database.updateLiveState(dbItem.streamer, false)
+            
+          }
+          if(dbItem.is_playing !== "Nothing") {
+            await database.updateIsPlayingState(dbItem.streamer, "Nothing")
+          }
+        }
+      }
 
-  if(isLive) {
-    if(isLiveFromDB == false) {
-      await database.updateLiveState(true)
-      sendNotification(channelName);
+      
+
+      const isPlayingGameFromDB = dbItem.games.includes(obj.is_playing)
+
+      if(dbItem.streamer === obj.streamer && dbItem.is_playing !== obj.is_playing && obj.is_live === true) {
+        if(isPlayingGameFromDB) {
+          await sendGameNotification(obj.streamer, obj.is_playing);
+        }
+        await database.updateIsPlayingState(obj.streamer, obj.is_playing)
+      }
     }
   }
-
-  if(isLiveAndMinecraft == true) {
-    if(isPlayingFromDB != "Minecraft") {
-      await startInstanceByTag("Name", "PaceManBot")
-      await database.updateIsPlayingState("Minecraft")
-      await disable5MinRule()
-      await enable30MinRule()
-    }
-    else {
-      console.log("No instances has been started")
-    }
-    
-    
-  }
-  else if(isLiveAndMinecraft == false) {
-    if(isPlayingFromDB == "Minecraft") {
-      await stopInstancesByTag("Name", "PaceManBot")
-      await database.updateIsPlayingState("Not Minecraft")
-      await enable5MinRule()
-      await disable30MinRule()
-    }
-  }
-
-  if(isLive == false) {
-    await database.updateLiveState(false)
-  }
-  
+  return "checked if streamers are live"
 }
 
 async function disable5MinRule() {
@@ -164,14 +187,9 @@ async function enable30MinRule() {
 }
 
 export const handler = async(event) => {
-
-  let isLiveBoolean = await checkLive(event['streamer'])
-  let streamerString = event['streamer']
-
   const response = {
       statusCode: 200,
-      isLive: isLiveBoolean,
-      streamer: streamerString
+      status: await checkLive()
   };
   return response;
 };
